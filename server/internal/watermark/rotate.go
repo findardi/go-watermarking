@@ -18,8 +18,8 @@ func rotate(src image.Image, angle int) image.Image {
 	rad := float64(angle) * math.Pi / 180
 	s, c := math.Sin(rad), math.Cos(rad)
 
-	newW := math.Abs((w * c) + (h * s))
-	newH := math.Abs((w * s) + (h * c))
+	newW := math.Ceil((w * math.Abs(c)) + (h * math.Abs(s)))
+	newH := math.Ceil((w * math.Abs(s)) + (h * math.Abs(c)))
 
 	cx, cy := w/2, h/2
 	dx, dy := newW/2, newH/2

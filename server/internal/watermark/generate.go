@@ -10,5 +10,6 @@ func Generate(base image.Image, m Mark, p Placement, opacity float64) (image.Ima
 	if err != nil {
 		return nil, fmt.Errorf("err render mark: %w", err)
 	}
+	mark = rotate(mark, p.rotation())
 	return Apply(base, mark, p, opacity)
 }
