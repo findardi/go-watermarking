@@ -70,7 +70,7 @@ func (m TextMark) render(baseSize image.Point) (image.Image, error) {
 		return nil, err
 	}
 
-	defer face.Close()
+	defer func() { _ = face.Close() }()
 
 	d := &font.Drawer{Face: face}
 	adv := d.MeasureString(m.Text)
