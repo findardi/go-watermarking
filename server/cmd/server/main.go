@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+const devOrigin = "http://localhost:5173"
+
 func main() {
 	handler := api.NewHandler(app.Service{})
 
@@ -20,7 +22,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              ":8080",
-		Handler:           mux,
+		Handler:           api.CORS(devOrigin, mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
