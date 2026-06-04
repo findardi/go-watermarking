@@ -5,6 +5,7 @@ import (
 	"errors"
 	"go-watermarking/internal/api"
 	"go-watermarking/internal/app"
+	"go-watermarking/internal/web"
 	"log"
 	"net/http"
 	"os/signal"
@@ -18,6 +19,12 @@ func main() {
 	handler := api.NewHandler(app.Service{})
 
 	mux := http.NewServeMux()
+	webFs, err := web.FS()
+	if err != nil {
+		log.Fatalf("web fs: %v", err)
+	}
+
+	mux.Handle("/", api.SPA(webFs))
 	mux.HandleFunc("POST /api/v1/watermark", handler.Watermark)
 
 	srv := &http.Server{
