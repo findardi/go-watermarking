@@ -27,10 +27,7 @@
 
 		return {
 			mark,
-			placement: {
-				mode: placementMode,
-				angle: angle
-			},
+			placement: { mode: placementMode, angle },
 			opacity
 		};
 	}
@@ -61,121 +58,148 @@
 	}
 </script>
 
-<main>
-	<h1>Watermarking</h1>
+<main class="min-h-screen bg-base-200 p-4 md:p-8">
+	<div class="mx-auto max-w-5xl">
+		<h1 class="mb-6 text-3xl font-bold">Watermarking</h1>
 
-	<form onsubmit={handleSubmit}>
-		<!-- Base image (wajib) -->
-		<label>
-			Gambar dasar
-			<input
-				type="file"
-				accept="image/png,image/jpeg"
-				onchange={(e) => (imageFile = e.currentTarget.files?.[0] ?? null)}
-			/>
-		</label>
+		<div class="grid gap-6 md:grid-cols-2">
+			<!-- KIRI: Konfigurasi -->
+			<div class="card bg-base-100 shadow">
+				<div class="card-body">
+					<h2 class="card-title">Konfigurasi</h2>
 
-		<!-- Jenis mark -->
-		<fieldset>
-			<legend>Jenis watermark</legend>
-			<label><input type="radio" value="text" bind:group={markType} /> Teks</label>
-			<label><input type="radio" value="image" bind:group={markType} /> Logo</label>
-		</fieldset>
+					<form class="grid gap-4" onsubmit={handleSubmit}>
+						<!-- Gambar dasar -->
+						<fieldset class="fieldset">
+							<legend class="fieldset-legend">Gambar dasar</legend>
+							<input
+								type="file"
+								accept="image/png,image/jpeg"
+								class="file-input w-full"
+								onchange={(e) => (imageFile = e.currentTarget.files?.[0] ?? null)}
+							/>
+						</fieldset>
 
-		<!-- Field khusus mark teks -->
-		{#if markType === 'text'}
-			<label>
-				Teks
-				<input type="text" bind:value={text} />
-			</label>
-			<label>
-				Warna
-				<input type="color" bind:value={color} />
-			</label>
-		{:else}
-			<label>
-				File Logo
-				<input
-					type="file"
-					accept="image/png,image/jpeg"
-					onchange={(e) => (watermarkFile = e.currentTarget.files?.[0] ?? null)}
-				/>
-			</label>
-		{/if}
+						<!-- Jenis mark -->
+						<fieldset class="fieldset">
+							<legend class="fieldset-legend">Jenis watermark</legend>
+							<select class="select w-full" bind:value={markType}>
+								<option value="text">Teks</option>
+								<option value="image">Logo</option>
+							</select>
+						</fieldset>
 
-		<!-- Scale: dipakai kedua jenis -->
-		<label>
-			Ukuran (fraksi lebar gambar): {scale}
-			<input type="range" min="0.02" max="0.5" step="0.01" bind:value={scale} />
-		</label>
+						<!-- Field khusus -->
+						{#if markType === 'text'}
+							<label class="floating-label">
+								<span>Teks</span>
+								<input type="text" class="input w-full" bind:value={text} />
+							</label>
+							<label class="flex items-center gap-3">
+								<span class="grow">Warna</span>
+								<input type="color" class="h-10 w-14 rounded" bind:value={color} />
+							</label>
+						{:else}
+							<fieldset class="fieldset">
+								<legend class="fieldset-legend">File Logo</legend>
+								<input
+									type="file"
+									accept="image/png,image/jpeg"
+									class="file-input w-full"
+									onchange={(e) => (watermarkFile = e.currentTarget.files?.[0] ?? null)}
+								/>
+							</fieldset>
+						{/if}
 
-		<!-- Penempatan -->
-		<fieldset>
-			<legend>Penempatan</legend>
-			<label><input type="radio" value="center" bind:group={placementMode} /> Tengah</label>
-			<label><input type="radio" value="pattern" bind:group={placementMode} /> Pola b</label>
-		</fieldset>
+						<!-- Scale -->
+						<div>
+							<div class="mb-1 flex justify-between text-sm">
+								<span>Ukuran (fraksi lebar)</span><span class="font-mono">{scale}</span>
+							</div>
+							<input
+								type="range"
+								min="0.02"
+								max="0.5"
+								step="0.01"
+								class="range w-full"
+								bind:value={scale}
+							/>
+						</div>
 
-		{#if placementMode === 'pattern'}
-			<label>
-				Sudut
-				<select bind:value={angle}>
-					<option value={0}>0° (lurus)</option>
-					<option value={45}>45° (diagonal)</option>
-				</select>
-			</label>
-		{/if}
+						<!-- Penempatan -->
+						<fieldset class="fieldset">
+							<legend class="fieldset-legend">Penempatan</legend>
+							<div class="flex gap-4">
+								<label class="flex items-center gap-2">
+									<input type="radio" class="radio" value="center" bind:group={placementMode} /> Tengah
+								</label>
+								<label class="flex items-center gap-2">
+									<input type="radio" class="radio" value="pattern" bind:group={placementMode} /> Pola
+								</label>
+							</div>
+						</fieldset>
 
-		<!-- Opacity -->
-		<label>
-			Opacity: {opacity}
-			<input type="range" min="0" max="1" step="0.05" bind:value={opacity} />
-		</label>
+						{#if placementMode === 'pattern'}
+							<fieldset class="fieldset">
+								<legend class="fieldset-legend">Sudut</legend>
+								<select class="select w-full" bind:value={angle}>
+									<option value={0}>0° (lurus)</option>
+									<option value={45}>45° (diagonal)</option>
+								</select>
+							</fieldset>
+						{/if}
 
-		<button type="submit" disabled={!canSubmit || loading}>
-			{loading ? 'Memproses…' : 'Buat watermark'}
-		</button>
-	</form>
+						<!-- Opacity -->
+						<div>
+							<div class="mb-1 flex justify-between text-sm">
+								<span>Opacity</span><span class="font-mono">{opacity}</span>
+							</div>
+							<input
+								type="range"
+								min="0"
+								max="1"
+								step="0.05"
+								class="range w-full"
+								bind:value={opacity}
+							/>
+						</div>
 
-	{#if errMsg}
-		<p class="error" role="alert">{errMsg}</p>
-	{/if}
+						<button type="submit" class="btn btn-primary" disabled={!canSubmit || loading}>
+							{#if loading}<span class="loading loading-spinner loading-sm"></span>{/if}
+							{loading ? 'Memproses…' : 'Buat watermark'}
+						</button>
+					</form>
+				</div>
+			</div>
 
-	{#if resUrl}
-		<section>
-			<h2>Hasil</h2>
-			<img src={resUrl} alt="Hasil watermark" />
-			<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- blob object URL rute -->
-			<a href={resUrl} download="watermarked">Download</a>
-		</section>
-	{/if}
+			<!-- KANAN: Preview -->
+			<div class="card bg-base-100 shadow">
+				<div class="card-body">
+					<h2 class="card-title">Preview</h2>
+
+					{#if errMsg}
+						<div role="alert" class="alert alert-error">
+							<span>{errMsg}</span>
+						</div>
+					{/if}
+
+					{#if loading}
+						<div class="grid h-64 place-items-center">
+							<span class="loading loading-spinner loading-lg"></span>
+						</div>
+					{:else if resUrl}
+						<img src={resUrl} alt="Hasil watermark" class="w-full rounded" />
+						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
+						<a href={resUrl} download="watermarked" class="btn btn-outline mt-2">Download</a>
+					{:else}
+						<div
+							class="grid h-64 place-items-center rounded border-2 border-dashed border-base-300 text-base-content/50"
+						>
+							Hasil watermark akan muncul di sini
+						</div>
+					{/if}
+				</div>
+			</div>
+		</div>
+	</div>
 </main>
-
-<style>
-	main {
-		max-width: 32rem;
-		margin: 2rem auto;
-		display: grid;
-		gap: 1rem;
-		font-family: system-ui, sans-serif;
-	}
-	form {
-		display: grid;
-		gap: 0.75rem;
-	}
-	label {
-		display: grid;
-		gap: 0.25rem;
-	}
-	fieldset {
-		display: grid;
-		gap: 0.25rem;
-	}
-	.error {
-		color: #b00020;
-	}
-	img {
-		max-width: 100%;
-		height: auto;
-	}
-</style>
