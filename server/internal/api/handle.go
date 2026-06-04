@@ -9,7 +9,9 @@ import (
 	"net/http"
 )
 
-const defaultMaxBytes = 10 << 20
+const (
+	maxRequestSize = 200 << 20 // 200mb
+)
 
 type Watermarker interface {
 	Watermark(app.Request) ([]app.Result, error)
@@ -23,7 +25,7 @@ type Handler struct {
 func NewHandler(svc Watermarker) *Handler {
 	return &Handler{
 		svc:      svc,
-		maxBytes: defaultMaxBytes,
+		maxBytes: maxRequestSize,
 	}
 }
 
