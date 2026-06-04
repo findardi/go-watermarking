@@ -41,13 +41,22 @@ func buildMultipart(t *testing.T, cfg string, img, wm []byte) (*bytes.Buffer, st
 	}
 	if img != nil {
 		fw, _ := mw.CreateFormFile("image", "base.png")
-		fw.Write(img)
+		_, err := fw.Write(img)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	if wm != nil {
 		fw, _ := mw.CreateFormFile("watermark", "wm.png")
-		fw.Write(wm)
+		_, err := fw.Write(wm)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
-	mw.Close()
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
 	return &body, mw.FormDataContentType()
 }
 
