@@ -1,0 +1,63 @@
+name: Server CI
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - 'server/**'
+      - '.github/workflows/server-ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - '.github/workflows/server-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: server-lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up GO
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          install-mode: goinstall
+          version: v2.5.0
+          working-directory: server
+
+  test:
+    name: server-test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up GO
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Build binary
+        run: go build ./...
+
+      - name: Test
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: Coverage summary
+        run: go tool cover -func=coverage.out | tail -1

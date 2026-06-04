@@ -8,6 +8,7 @@ const patternGap = 16
 
 type Placement interface {
 	positions(baseSize, markSize image.Point) []image.Point
+	rotation() int
 }
 
 type Center struct{}
@@ -16,6 +17,10 @@ func (Center) positions(baseSize, markSize image.Point) []image.Point {
 	x := (baseSize.X - markSize.X) / 2
 	y := (baseSize.Y - markSize.Y) / 2
 	return []image.Point{image.Pt(x, y)}
+}
+
+func (Center) rotation() int {
+	return 0
 }
 
 type Pattern struct {
@@ -33,4 +38,8 @@ func (Pattern) positions(baseSize, markSize image.Point) []image.Point {
 		}
 	}
 	return points
+}
+
+func (p Pattern) rotation() int {
+	return p.Angle
 }
