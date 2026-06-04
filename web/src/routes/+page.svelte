@@ -74,6 +74,14 @@
 		}
 	}
 
+	async function downloadOne(i: number) {
+		const r = results[i];
+		const a = document.createElement('a');
+		a.href = r.url;
+		a.download = `watermark-${i + 1}.${r.format}`;
+		a.click();
+	}
+
 	async function downloadZip() {
 		if (results.length === 0) return;
 
@@ -229,7 +237,7 @@
 
 						{#if results.length > 1}
 							<div class="mt-2 flex gap-2 overflow-x-auto pb-2">
-								{#each results as r, i}
+								{#each results as r, i (r.url)}
 									<button
 										type="button"
 										class="shrink-0 overflow-hidden rounded border {i === selectedIndex
@@ -244,14 +252,14 @@
 						{/if}
 
 						<div class="mt-2 flex gap-2">
-							<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
-							<a
-								href={results[selectedIndex].url}
-								download={`watermark-${selectedIndex + 1}.${results[selectedIndex].format}`}
+							<button
 								class="btn btn-outline"
+								onclick={() => {
+									downloadOne(selectedIndex);
+								}}
 							>
 								Download
-							</a>
+							</button>
 							<button
 								type="button"
 								class="btn btn-neutral"
