@@ -1,3 +1,5 @@
+import JSZip from 'jszip';
+
 const API_BASE = 'http://localhost:8080';
 const ENDPOINT = `${API_BASE}/api/v1/watermark`;
 
@@ -14,8 +16,13 @@ export interface WatermarkConfig {
 }
 
 export interface WatermarkFiles {
-	image: File;
+	image: File[];
 	watermark?: File;
+}
+
+export interface WatermarkResult {
+	blob: Blob;
+	format: string;
 }
 
 export class WatermarkError extends Error {
@@ -35,10 +42,38 @@ interface ErrorBody {
 	};
 }
 
+interface ResultBody {
+	data: string;
+	format: string;
+}
+
+function formatToMime(format: string): string {
+	switch (format) {
+		case 'png':
+			return 'image/png';
+		case 'jpeg':
+			return 'image/jpeg';
+		default:
+			return 'application/octet-stream';
+	}
+}
+
+function base64ToBlob(base64: string, mime: string): Blob {
+	const binary = atob(base64);
+	const bytes = new Uint8Array(binary.length);
+	for (let i = 0; i < binary.length; i++) {
+		bytes[i] = binary.charCodeAt(i);
+	}
+	return new Blob([bytes], { type: mime });
+}
+
 export function buildWatermarkform(config: WatermarkConfig, files: WatermarkFiles): FormData {
 	const form = new FormData();
 	form.append('config', JSON.stringify(config));
-	form.append('image', files.image);
+
+	for (const image of files.image) {
+		form.append('image', image);
+	}
 
 	if (config.mark.type === 'image') {
 		if (!files.watermark) {
@@ -50,9 +85,13 @@ export function buildWatermarkform(config: WatermarkConfig, files: WatermarkFile
 	return form;
 }
 
-export async function parseWatermarkResponse(resp: Response): Promise<Blob> {
+export async function parseWatermarkResponse(resp: Response): Promise<WatermarkResult[]> {
 	if (resp.ok) {
-		return resp.blob();
+		const body = (await resp.json()) as ResultBody[];
+		return body.map((r) => ({
+			blob: base64ToBlob(r.data, formatToMime(r.format)),
+			format: r.format
+		}));
 	}
 
 	let code = resp.status;
@@ -71,10 +110,19 @@ export async function parseWatermarkResponse(resp: Response): Promise<Blob> {
 	throw new WatermarkError(code, message);
 }
 
+export async function zipResults(result: WatermarkResult[]): Promise<Blob> {
+	const zip = new JSZip();
+	result.forEach((r, i) => {
+		zip.file(`watermark-${i + 1}.${r.format}`, r.blob);
+	});
+
+	return zip.generateAsync({ type: 'blob' });
+}
+
 export async function requestWatermark(
 	config: WatermarkConfig,
 	files: WatermarkFiles
-): Promise<Blob> {
+): Promise<WatermarkResult[]> {
 	const form = buildWatermarkform(config, files);
 	const resp = await fetch(ENDPOINT, {
 		method: 'POST',
