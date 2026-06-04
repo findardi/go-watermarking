@@ -2,6 +2,8 @@ package api
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -29,8 +31,8 @@ func pngBytes(t *testing.T, w, h int) []byte {
 	return buf.Bytes()
 }
 
-// buildMultipart merakit body multipart: config JSON + image + (opsional) watermark.
-func buildMultipart(t *testing.T, cfg string, img, wm []byte) (*bytes.Buffer, string) {
+// buildMultipart merakit body multipart: config JSON + N image + (opsional) watermark.
+func buildMultipart(t *testing.T, cfg string, imgs [][]byte, wm []byte) (*bytes.Buffer, string) {
 	t.Helper()
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
@@ -39,17 +41,15 @@ func buildMultipart(t *testing.T, cfg string, img, wm []byte) (*bytes.Buffer, st
 			t.Fatal(err)
 		}
 	}
-	if img != nil {
-		fw, _ := mw.CreateFormFile("image", "base.png")
-		_, err := fw.Write(img)
-		if err != nil {
+	for i, img := range imgs {
+		fw, _ := mw.CreateFormFile("image", fmt.Sprintf("base%d.png", i))
+		if _, err := fw.Write(img); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if wm != nil {
 		fw, _ := mw.CreateFormFile("watermark", "wm.png")
-		_, err := fw.Write(wm)
-		if err != nil {
+		if _, err := fw.Write(wm); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -62,13 +62,12 @@ func buildMultipart(t *testing.T, cfg string, img, wm []byte) (*bytes.Buffer, st
 
 // stubService mengembalikan hasil/eror yang ditentukan, untuk menguji handler terisolasi.
 type stubService struct {
-	data   []byte
-	format string
-	err    error
+	results []app.Result
+	err     error
 }
 
-func (s stubService) Watermark(app.Request) ([]byte, string, error) {
-	return s.data, s.format, s.err
+func (s stubService) Watermark(app.Request) ([]app.Result, error) {
+	return s.results, s.err
 }
 
 func do(t *testing.T, h *Handler, body *bytes.Buffer, ct string) *httptest.ResponseRecorder {
@@ -85,18 +84,51 @@ func TestHandlerSuccess(t *testing.T) {
 	h := NewHandler(app.Service{})
 	cfg :=
 		`{"mark":{"type":"text","text":"Hi","color":"#FF0000","scale":0.1},"placement":{"mode":"center"},"opacity":1.0}`
-	body, ct := buildMultipart(t, cfg, pngBytes(t, 100, 100), nil)
+	body, ct := buildMultipart(t, cfg, [][]byte{pngBytes(t, 100, 100)}, nil)
 
 	rec := do(t, h, body, ct)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-	if got := rec.Header().Get("Content-Type"); got != "image/png" {
-		t.Errorf("content-type = %q, want image/png", got)
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("content-type = %q, want application/json", got)
 	}
-	if _, _, err := image.Decode(bytes.NewReader(rec.Body.Bytes())); err != nil {
-		t.Errorf("body bukan gambar valid: %v", err)
+
+	var results []app.Result
+	if err := json.Unmarshal(rec.Body.Bytes(), &results); err != nil {
+		t.Fatalf("body bukan JSON valid: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(results))
+	}
+	if results[0].Format != "png" {
+		t.Errorf("format = %q, want png", results[0].Format)
+	}
+	// Data di-decode base64 otomatis oleh json.Unmarshal → harus gambar valid
+	if _, _, err := image.Decode(bytes.NewReader(results[0].Data)); err != nil {
+		t.Errorf("data bukan gambar valid: %v", err)
+	}
+}
+
+func TestHandlerMultipleImages(t *testing.T) {
+	h := NewHandler(app.Service{})
+	cfg := `{"mark":{"type":"text","text":"Hi","color":"#FF0000","scale":0.1},"placement":{"mode":"center"},"opacity":1.0}`
+	imgs := [][]byte{pngBytes(t, 80, 80), pngBytes(t, 40, 40)}
+	body, ct := buildMultipart(t, cfg, imgs, nil)
+
+	rec := do(t, h, body, ct)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	var results []app.Result
+	if err := json.Unmarshal(rec.Body.Bytes(), &results); err != nil {
+		t.Fatalf("body bukan JSON valid: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("len(results) = %d, want 2", len(results))
 	}
 }
 
@@ -112,7 +144,7 @@ func TestHandlerMissingImage(t *testing.T) {
 
 func TestHandlerInvalidConfig(t *testing.T) {
 	h := NewHandler(app.Service{})
-	body, ct := buildMultipart(t, `{bukan json`, pngBytes(t, 50, 50), nil)
+	body, ct := buildMultipart(t, `{bukan json`, [][]byte{pngBytes(t, 50, 50)}, nil)
 	rec := do(t, h, body, ct)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rec.Code)
@@ -122,7 +154,7 @@ func TestHandlerInvalidConfig(t *testing.T) {
 func TestHandlerServiceError(t *testing.T) {
 	h := NewHandler(stubService{err: io.ErrUnexpectedEOF})
 	cfg := `{"mark":{"type":"text","text":"Hi","color":"#FF0000","scale":0.1},"placement":{"mode":"center"},"opacity":1.0}`
-	body, ct := buildMultipart(t, cfg, pngBytes(t, 50, 50), nil)
+	body, ct := buildMultipart(t, cfg, [][]byte{pngBytes(t, 50, 50)}, nil)
 	rec := do(t, h, body, ct)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Errorf("status = %d, want 422", rec.Code)
@@ -131,8 +163,8 @@ func TestHandlerServiceError(t *testing.T) {
 
 func TestHandlerTooLarge(t *testing.T) {
 	h := NewHandler(app.Service{})
-	h.maxBytes = 100                                                // paksa batas kecil
-	body, ct := buildMultipart(t, `{}`, pngBytes(t, 200, 200), nil) // > 100 byte
+	h.maxBytes = 100                                                          // paksa batas kecil
+	body, ct := buildMultipart(t, `{}`, [][]byte{pngBytes(t, 200, 200)}, nil) // > 100 byte
 	rec := do(t, h, body, ct)
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Errorf("status = %d, want 413", rec.Code)
