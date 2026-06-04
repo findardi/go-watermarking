@@ -69,13 +69,13 @@ func (s Service) Watermark(req Request) ([]Result, error) {
 			}
 			result[i] = Result{Data: data, Format: f}
 		}()
+	}
 
-		wg.Wait()
+	wg.Wait()
 
-		for i, err := range errs {
-			if err != nil {
-				return nil, fmt.Errorf("failed process image %d: %w", i, err)
-			}
+	for i, err := range errs {
+		if err != nil {
+			return nil, fmt.Errorf("failed process image %d: %w", i, err)
 		}
 	}
 
