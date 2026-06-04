@@ -5,13 +5,16 @@ import (
 	"errors"
 	"go-watermarking/internal/app"
 	"io"
+	"mime/multipart"
 	"net/http"
 )
 
-const defaultMaxBytes = 10 << 20
+const (
+	maxRequestSize = 200 << 20 // 200mb
+)
 
 type Watermarker interface {
-	Watermark(app.Request) (data []byte, format string, err error)
+	Watermark(app.Request) ([]app.Result, error)
 }
 
 type Handler struct {
@@ -22,7 +25,7 @@ type Handler struct {
 func NewHandler(svc Watermarker) *Handler {
 	return &Handler{
 		svc:      svc,
-		maxBytes: defaultMaxBytes,
+		maxBytes: maxRequestSize,
 	}
 }
 
@@ -73,7 +76,7 @@ func (h *Handler) Watermark(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	img, err := readFilePart(r, "image")
+	img, err := readFilesPart(r, "image")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "missing image")
 		return
@@ -100,36 +103,58 @@ func (h *Handler) Watermark(w http.ResponseWriter, r *http.Request) {
 		Opacity:   cfg.Opacity,
 	}
 
-	data, format, err := h.svc.Watermark(req)
+	result, err := h.svc.Watermark(req)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", contentType(format))
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(data)
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+func readFilesPart(r *http.Request, name string) ([][]byte, error) {
+	headers := r.MultipartForm.File[name]
+
+	if len(headers) == 0 {
+		return nil, errors.New("missing content-length")
+	}
+	files := make([][]byte, 0, len(headers))
+	for _, fh := range headers {
+		data, err := readFile(fh)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, data)
+	}
+
+	return files, nil
 }
 
 func readFilePart(r *http.Request, name string) ([]byte, error) {
-	f, _, err := r.FormFile(name)
+	headers := r.MultipartForm.File[name]
+
+	if len(headers) == 0 {
+		return nil, errors.New("missing content-length")
+	}
+
+	return readFile(headers[0])
+}
+
+func readFile(fh *multipart.FileHeader) (data []byte, err error) {
+	f, err := fh.Open()
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = f.Close() }()
+
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 
 	return io.ReadAll(f)
-}
-
-func contentType(format string) string {
-	switch format {
-	case "jpeg":
-		return "image/jpeg"
-	case "png":
-		return "image/png"
-	default:
-		return "application/octet-stream"
-	}
 }
 
 func writeError(w http.ResponseWriter, code int, msg string) {

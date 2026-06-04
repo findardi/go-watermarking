@@ -1,11 +1,17 @@
 <script lang="ts">
-	import { requestWatermark, WatermarkError, type Angle, type WatermarkConfig } from '$lib/api';
+	import {
+		requestWatermark,
+		WatermarkError,
+		zipResults,
+		type Angle,
+		type WatermarkConfig
+	} from '$lib/api';
 
-	let imageFile = $state<File | null>(null);
+	let imageFiles = $state<File[]>([]);
 	let watermarkFile = $state<File | null>(null);
 
 	let markType = $state<'text' | 'image'>('text');
-	let text = $state('watermark');
+	let text = $state('CONFIDENTAL');
 	let color = $state('#ffffff');
 	let scale = $state(0.07);
 
@@ -14,10 +20,19 @@
 	let opacity = $state(0.5);
 
 	let loading = $state(false);
+	let zipping = $state(false);
 	let errMsg = $state<string | null>(null);
-	let resUrl = $state<string | null>(null);
+	let results = $state<{ url: string; blob: Blob; format: string }[]>([]);
+	let selectedIndex = $state(0);
 
-	let canSubmit = $derived(imageFile !== null && (markType === 'text' || watermarkFile !== null));
+	let canSubmit = $derived(
+		imageFiles.length > 0 && (markType === 'text' || watermarkFile !== null)
+	);
+
+	function revokeResults() {
+		for (const r of results) URL.revokeObjectURL(r.url);
+		results = [];
+	}
 
 	function buildConfig(): WatermarkConfig {
 		const mark =
@@ -34,26 +49,60 @@
 
 	async function handleSubmit(event: SubmitEvent) {
 		event.preventDefault();
-		if (!imageFile) return;
+		if (imageFiles.length === 0) return;
 
 		loading = true;
 		errMsg = null;
-
-		if (resUrl) {
-			URL.revokeObjectURL(resUrl);
-			resUrl = null;
-		}
+		revokeResults();
 
 		try {
-			const blob = await requestWatermark(buildConfig(), {
-				image: imageFile,
+			const out = await requestWatermark(buildConfig(), {
+				image: imageFiles,
 				watermark: watermarkFile ?? undefined
 			});
-			resUrl = URL.createObjectURL(blob);
+
+			results = out.map((r) => ({
+				url: URL.createObjectURL(r.blob),
+				blob: r.blob,
+				format: r.format
+			}));
+			selectedIndex = 0;
 		} catch (error) {
 			errMsg = error instanceof WatermarkError ? error.message : 'failed to processing image';
 		} finally {
 			loading = false;
+		}
+	}
+
+	async function downloadOne(i: number) {
+		const r = results[i];
+		const a = document.createElement('a');
+		a.href = r.url;
+		a.download = `watermark-${i + 1}.${r.format}`;
+		a.click();
+	}
+
+	async function downloadZip() {
+		if (results.length === 0) return;
+
+		zipping = true;
+
+		try {
+			const blob = await zipResults(
+				results.map((r) => ({
+					blob: r.blob,
+					format: r.format
+				}))
+			);
+
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = 'watermark.zip';
+			a.click();
+			URL.revokeObjectURL(url);
+		} finally {
+			zipping = false;
 		}
 	}
 </script>
@@ -63,36 +112,34 @@
 		<h1 class="mb-6 text-3xl font-bold">Watermarking</h1>
 
 		<div class="grid gap-6 md:grid-cols-2">
-			<!-- KIRI: Konfigurasi -->
+			<!-- Configuration -->
 			<div class="card bg-base-100 shadow">
 				<div class="card-body">
-					<h2 class="card-title">Konfigurasi</h2>
+					<h2 class="card-title">Configuration</h2>
 
 					<form class="grid gap-4" onsubmit={handleSubmit}>
-						<!-- Gambar dasar -->
 						<fieldset class="fieldset">
-							<legend class="fieldset-legend">Gambar dasar</legend>
+							<legend class="fieldset-legend">Base Files</legend>
 							<input
 								type="file"
 								accept="image/png,image/jpeg"
+								multiple
 								class="file-input w-full"
-								onchange={(e) => (imageFile = e.currentTarget.files?.[0] ?? null)}
+								onchange={(e) => (imageFiles = Array.from(e.currentTarget.files ?? []))}
 							/>
 						</fieldset>
 
-						<!-- Jenis mark -->
 						<fieldset class="fieldset">
-							<legend class="fieldset-legend">Jenis watermark</legend>
+							<legend class="fieldset-legend">Mark Type</legend>
 							<select class="select w-full" bind:value={markType}>
-								<option value="text">Teks</option>
+								<option value="text">Text</option>
 								<option value="image">Logo</option>
 							</select>
 						</fieldset>
 
-						<!-- Field khusus -->
 						{#if markType === 'text'}
 							<label class="floating-label">
-								<span>Teks</span>
+								<span>Text</span>
 								<input type="text" class="input w-full" bind:value={text} />
 							</label>
 							<label class="flex items-center gap-3">
@@ -101,7 +148,7 @@
 							</label>
 						{:else}
 							<fieldset class="fieldset">
-								<legend class="fieldset-legend">File Logo</legend>
+								<legend class="fieldset-legend">Logo File</legend>
 								<input
 									type="file"
 									accept="image/png,image/jpeg"
@@ -111,10 +158,9 @@
 							</fieldset>
 						{/if}
 
-						<!-- Scale -->
 						<div>
 							<div class="mb-1 flex justify-between text-sm">
-								<span>Ukuran (fraksi lebar)</span><span class="font-mono">{scale}</span>
+								<span>Size (Width Fraction)</span><span class="font-mono">{scale}</span>
 							</div>
 							<input
 								type="range"
@@ -126,25 +172,24 @@
 							/>
 						</div>
 
-						<!-- Penempatan -->
 						<fieldset class="fieldset">
-							<legend class="fieldset-legend">Penempatan</legend>
+							<legend class="fieldset-legend">Placement</legend>
 							<div class="flex gap-4">
 								<label class="flex items-center gap-2">
-									<input type="radio" class="radio" value="center" bind:group={placementMode} /> Tengah
+									<input type="radio" class="radio" value="center" bind:group={placementMode} /> Center
 								</label>
 								<label class="flex items-center gap-2">
-									<input type="radio" class="radio" value="pattern" bind:group={placementMode} /> Pola
+									<input type="radio" class="radio" value="pattern" bind:group={placementMode} /> Pattern
 								</label>
 							</div>
 						</fieldset>
 
 						{#if placementMode === 'pattern'}
 							<fieldset class="fieldset">
-								<legend class="fieldset-legend">Sudut</legend>
+								<legend class="fieldset-legend">Corner</legend>
 								<select class="select w-full" bind:value={angle}>
-									<option value={0}>0° (lurus)</option>
-									<option value={45}>45° (diagonal)</option>
+									<option value={0}>0° (Straight)</option>
+									<option value={45}>45° (Diagonal)</option>
 								</select>
 							</fieldset>
 						{/if}
@@ -164,15 +209,15 @@
 							/>
 						</div>
 
-						<button type="submit" class="btn btn-primary" disabled={!canSubmit || loading}>
+						<button type="submit" class="btn btn-outline" disabled={!canSubmit || loading}>
 							{#if loading}<span class="loading loading-spinner loading-sm"></span>{/if}
-							{loading ? 'Memproses…' : 'Buat watermark'}
+							{loading ? 'Processing..' : 'Create watermark'}
 						</button>
 					</form>
 				</div>
 			</div>
 
-			<!-- KANAN: Preview -->
+			<!-- Preview -->
 			<div class="card bg-base-100 shadow">
 				<div class="card-body">
 					<h2 class="card-title">Preview</h2>
@@ -187,15 +232,48 @@
 						<div class="grid h-64 place-items-center">
 							<span class="loading loading-spinner loading-lg"></span>
 						</div>
-					{:else if resUrl}
-						<img src={resUrl} alt="Hasil watermark" class="w-full rounded" />
-						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
-						<a href={resUrl} download="watermarked" class="btn btn-outline mt-2">Download</a>
+					{:else if results.length > 0}
+						<img src={results[selectedIndex].url} alt="Hasil watermark" class="w-full rounded" />
+
+						{#if results.length > 1}
+							<div class="mt-2 flex gap-2 overflow-x-auto pb-2">
+								{#each results as r, i (r.url)}
+									<button
+										type="button"
+										class="shrink-0 overflow-hidden rounded border {i === selectedIndex
+											? 'ring-2 ring-neutral'
+											: 'border-base-300'}"
+										onclick={() => (selectedIndex = i)}
+									>
+										<img src={r.url} alt={`Hasil ${i + 1}`} class="h-16 w-16 object-cover" />
+									</button>
+								{/each}
+							</div>
+						{/if}
+
+						<div class="mt-2 flex gap-2">
+							<button
+								class="btn btn-outline"
+								onclick={() => {
+									downloadOne(selectedIndex);
+								}}
+							>
+								Download
+							</button>
+							<button
+								type="button"
+								class="btn btn-neutral"
+								onclick={downloadZip}
+								disabled={zipping}
+							>
+								{zipping ? 'Zipping..' : 'Download All (ZIP)'}
+							</button>
+						</div>
 					{:else}
 						<div
 							class="grid h-64 place-items-center rounded border-2 border-dashed border-base-300 text-base-content/50"
 						>
-							Hasil watermark akan muncul di sini
+							Result Watermark
 						</div>
 					{/if}
 				</div>
