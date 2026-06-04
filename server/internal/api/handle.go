@@ -118,7 +118,7 @@ func readFilesPart(r *http.Request, name string) ([][]byte, error) {
 	headers := r.MultipartForm.File[name]
 
 	if len(headers) == 0 {
-		return nil, http.ErrMissingContentLength
+		return nil, errors.New("missing content-length")
 	}
 	files := make([][]byte, 0, len(headers))
 	for _, fh := range headers {
@@ -136,20 +136,22 @@ func readFilePart(r *http.Request, name string) ([]byte, error) {
 	headers := r.MultipartForm.File[name]
 
 	if len(headers) == 0 {
-		return nil, http.ErrMissingContentLength
+		return nil, errors.New("missing content-length")
 	}
 
 	return readFile(headers[0])
 }
 
-func readFile(fh *multipart.FileHeader) ([]byte, error) {
+func readFile(fh *multipart.FileHeader) (data []byte, err error) {
 	f, err := fh.Open()
 	if err != nil {
 		return nil, err
 	}
 
 	defer func() {
-		f.Close()
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
 	}()
 
 	return io.ReadAll(f)
