@@ -11,7 +11,7 @@ on:
       - 'web/**'
       - '.github/workflows/web-ci.yml'
 
-permission:
+permissions:
   contents: read
 
 jobs:
