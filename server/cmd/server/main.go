@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 )
@@ -16,7 +17,8 @@ import (
 const devOrigin = "http://localhost:5173"
 
 func main() {
-	handler := api.NewHandler(app.Service{})
+	service := app.NewService(runtime.NumCPU())
+	handler := api.NewHandler(service)
 
 	mux := http.NewServeMux()
 	webFs, err := web.FS()
