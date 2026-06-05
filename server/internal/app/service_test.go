@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"image"
 	"image/color"
 	"image/png"
@@ -9,6 +10,18 @@ import (
 
 	"go-watermarking/internal/codec"
 )
+
+// firstErr mengembalikan error per-gambar pertama yang tidak nil.
+// Service kini mengembalikan []error sejajar index, jadi slice non-nil
+// berisi nil-nil bukan berarti gagal — yang menentukan adalah elemennya.
+func firstErr(errs []error) error {
+	for _, e := range errs {
+		if e != nil {
+			return e
+		}
+	}
+	return nil
+}
 
 // pngBytes membuat gambar solid sebagai byte PNG untuk fixture.
 func pngBytes(t *testing.T, w, h int, c color.RGBA) []byte {
@@ -40,9 +53,9 @@ func TestServiceWatermark(t *testing.T) {
 			Placement: "center",
 			Opacity:   1.0,
 		}
-		results, err := Service{}.Watermark(req)
-		if err != nil {
-			t.Fatalf("err: %v", err)
+		results, errs := NewService(8).Watermark(context.Background(), req)
+		if e := firstErr(errs); e != nil {
+			t.Fatalf("err: %v", e)
 		}
 		if len(results) != 1 {
 			t.Fatalf("len(results) = %d, want 1", len(results))
@@ -76,9 +89,9 @@ func TestServiceWatermark(t *testing.T) {
 			Placement: "center",
 			Opacity:   1.0,
 		}
-		results, err := Service{}.Watermark(req)
-		if err != nil {
-			t.Fatalf("err: %v", err)
+		results, errs := NewService(8).Watermark(context.Background(), req)
+		if e := firstErr(errs); e != nil {
+			t.Fatalf("err: %v", e)
 		}
 
 		want := []image.Rectangle{
@@ -110,9 +123,9 @@ func TestServiceWatermark(t *testing.T) {
 			Angle:     45,
 			Opacity:   0.5,
 		}
-		results, err := Service{}.Watermark(req)
-		if err != nil {
-			t.Fatalf("err: %v", err)
+		results, errs := NewService(8).Watermark(context.Background(), req)
+		if e := firstErr(errs); e != nil {
+			t.Fatalf("err: %v", e)
 		}
 		if len(results) != 1 || len(results[0].Data) == 0 {
 			t.Fatal("hasil kosong")
@@ -121,21 +134,21 @@ func TestServiceWatermark(t *testing.T) {
 
 	t.Run("base bukan gambar — error", func(t *testing.T) {
 		req := Request{Image: [][]byte{[]byte("bukan gambar")}, MarkType: MarkText, Text: "x", HexColor: "#FFFFFF", Scale: 0.1, Placement: "center", Opacity: 1}
-		if _, err := (Service{}).Watermark(req); err == nil {
+		if _, errs := NewService(8).Watermark(context.Background(), req); firstErr(errs) == nil {
 			t.Error("ingin error")
 		}
 	})
 
 	t.Run("mark type tak dikenal — error", func(t *testing.T) {
 		req := Request{Image: [][]byte{base}, MarkType: "video", Scale: 0.1, Placement: "center", Opacity: 1}
-		if _, err := (Service{}).Watermark(req); err == nil {
+		if _, errs := NewService(8).Watermark(context.Background(), req); firstErr(errs) == nil {
 			t.Error("ingin error")
 		}
 	})
 
 	t.Run("placement tak dikenal — error", func(t *testing.T) {
 		req := Request{Image: [][]byte{base}, MarkType: MarkText, Text: "x", HexColor: "#FFFFFF", Scale: 0.1, Placement: "diagonal", Opacity: 1}
-		if _, err := (Service{}).Watermark(req); err == nil {
+		if _, errs := NewService(8).Watermark(context.Background(), req); firstErr(errs) == nil {
 			t.Error("ingin error")
 		}
 	})
