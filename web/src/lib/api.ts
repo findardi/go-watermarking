@@ -2,6 +2,8 @@ import JSZip from 'jszip';
 
 const API_BASE = 'http://localhost:8080';
 const ENDPOINT = `${API_BASE}/api/v1/watermark`;
+const SAFE_BATCH_BYTES = 180 * 1024 * 1024;
+const MAX_FILES_BYTES = 20 * 1024 * 1024;
 
 export type Angle = 0 | 45;
 
@@ -42,11 +44,6 @@ interface ErrorBody {
 	};
 }
 
-interface ResultBody {
-	data: string;
-	format: string;
-}
-
 function formatToMime(format: string): string {
 	switch (format) {
 		case 'png':
@@ -85,15 +82,119 @@ export function buildWatermarkform(config: WatermarkConfig, files: WatermarkFile
 	return form;
 }
 
-export async function parseWatermarkResponse(resp: Response): Promise<WatermarkResult[]> {
-	if (resp.ok) {
-		const body = (await resp.json()) as ResultBody[];
-		return body.map((r) => ({
-			blob: base64ToBlob(r.data, formatToMime(r.format)),
-			format: r.format
-		}));
+export async function zipResults(result: WatermarkResult[]): Promise<Blob> {
+	const zip = new JSZip();
+	result.forEach((r, i) => {
+		zip.file(`watermark-${i + 1}.${r.format}`, r.blob);
+	});
+
+	return zip.generateAsync({ type: 'blob' });
+}
+
+export interface BatchPlanOptions {
+	maxBatchBytes: number;
+	maxFileBytes: number;
+	reservedBytes: number;
+}
+
+export interface RejectedFile {
+	file: File;
+	reason: 'too-large';
+}
+
+export interface BatchPlan {
+	batches: File[][];
+	rejected: RejectedFile[];
+}
+
+export function planBatches(files: File[], opts: BatchPlanOptions): BatchPlan {
+	const batches: File[][] = [];
+	const rejected: RejectedFile[] = [];
+
+	const budget = opts.maxBatchBytes - opts.reservedBytes;
+
+	let current: File[] = [];
+	let currentBytes = 0;
+
+	for (const file of files) {
+		if (file.size > opts.maxFileBytes) {
+			rejected.push({
+				file,
+				reason: 'too-large'
+			});
+			continue;
+		}
+
+		const exceedsBytes = currentBytes + file.size > budget;
+
+		if (current.length > 0 && exceedsBytes) {
+			batches.push(current);
+			current = [];
+			currentBytes = 0;
+		}
+
+		current.push(file);
+		currentBytes += file.size;
 	}
 
+	if (current.length > 0) {
+		batches.push(current);
+	}
+
+	return { batches, rejected };
+}
+
+export function batchOptions(config: WatermarkConfig, files: WatermarkFiles): BatchPlanOptions {
+	const watermarkBytes = config.mark.type === 'image' && files.watermark ? files.watermark.size : 0;
+	const configBytes = JSON.stringify(config).length;
+	const overhead = 1024;
+	return {
+		maxBatchBytes: SAFE_BATCH_BYTES,
+		maxFileBytes: MAX_FILES_BYTES,
+		reservedBytes: watermarkBytes + configBytes + overhead
+	};
+}
+
+interface ServerImageResult {
+	index: number;
+	filename?: string;
+	status: 'ok' | 'error';
+	format?: string;
+	data?: string;
+	error?: string;
+}
+
+interface ServerResponse {
+	total: number;
+	success: number;
+	failed: number;
+	results: ServerImageResult[];
+}
+
+export interface BatchProgress {
+	processed: number;
+	total: number;
+	batchIndex: number;
+	batchCount: number;
+}
+
+export interface ImageOutcome {
+	index: number;
+	filename?: string;
+	status: 'ok' | 'error';
+	blob?: Blob;
+	format?: string;
+	error?: string;
+}
+
+export interface BatchResult {
+	total: number;
+	success: number;
+	failed: number;
+	outcomes: ImageOutcome[];
+}
+
+async function throwResponseError(resp: Response): Promise<never> {
 	let code = resp.status;
 	let message = `${resp.status} ${resp.statusText}`;
 
@@ -104,30 +205,115 @@ export async function parseWatermarkResponse(resp: Response): Promise<WatermarkR
 			message = body.error.message;
 		}
 	} catch {
-		// using fallback status in above
+		// using fallback
 	}
-
 	throw new WatermarkError(code, message);
 }
 
-export async function zipResults(result: WatermarkResult[]): Promise<Blob> {
-	const zip = new JSZip();
-	result.forEach((r, i) => {
-		zip.file(`watermark-${i + 1}.${r.format}`, r.blob);
+async function sendBatch(
+	config: WatermarkConfig,
+	watermark: File | undefined,
+	images: File[]
+): Promise<ServerImageResult[]> {
+	const form = buildWatermarkform(config, {
+		image: images,
+		watermark
 	});
 
-	return zip.generateAsync({ type: 'blob' });
-}
-
-export async function requestWatermark(
-	config: WatermarkConfig,
-	files: WatermarkFiles
-): Promise<WatermarkResult[]> {
-	const form = buildWatermarkform(config, files);
 	const resp = await fetch(ENDPOINT, {
 		method: 'POST',
 		body: form
 	});
 
-	return parseWatermarkResponse(resp);
+	if (!resp.ok) {
+		await throwResponseError(resp);
+	}
+
+	const body = (await resp.json()) as ServerResponse;
+	return body.results;
+}
+
+function toOutcome(r: ServerImageResult, globalIndex: number): ImageOutcome {
+	if (r.status === 'ok' && r.data && r.format) {
+		return {
+			index: globalIndex,
+			filename: r.filename,
+			status: 'ok',
+			blob: base64ToBlob(r.data, formatToMime(r.format)),
+			format: r.format
+		};
+	}
+
+	return {
+		index: globalIndex,
+		filename: r.filename,
+		status: 'error',
+		error: r.error ?? 'failed to process'
+	};
+}
+
+export async function processInBatches(
+	config: WatermarkConfig,
+	files: WatermarkFiles,
+	opts: BatchPlanOptions,
+	onProgress: (p: BatchProgress) => void
+): Promise<BatchResult> {
+	const { batches, rejected } = planBatches(files.image, opts);
+
+	const indexOf = new Map<File, number>();
+	files.image.forEach((file, i) => indexOf.set(file, i));
+
+	const outComes: ImageOutcome[] = [];
+
+	for (const { file } of rejected) {
+		outComes.push({
+			index: indexOf.get(file) ?? -1,
+			filename: file.name,
+			status: 'error',
+			error: 'file exceeds more than 20MB'
+		});
+	}
+
+	const total = files.image.length;
+	const batchCount = batches.length;
+	let processed = rejected.length;
+
+	onProgress({ processed, total, batchIndex: 0, batchCount });
+
+	for (let b = 0; b < batches.length; b++) {
+		const batch = batches[b];
+
+		try {
+			const results = await sendBatch(config, files.watermark, batch);
+			for (const r of results) {
+				const file = batch[r.index];
+				outComes.push(toOutcome(r, indexOf.get(file) ?? -1));
+			}
+		} catch (err) {
+			const message = err instanceof Error ? err.message : 'batch gagal';
+			for (const file of batch) {
+				outComes.push({
+					index: indexOf.get(file) ?? -1,
+					filename: file.name,
+					status: 'error',
+					error: message
+				});
+			}
+		}
+
+		processed += batch.length;
+		onProgress({ processed, total, batchIndex: b + 1, batchCount });
+	}
+
+	outComes.sort((a, b) => a.index - b.index);
+
+	const success = outComes.filter((o) => o.status === 'ok').length;
+	const failed = outComes.length - success;
+
+	return {
+		total,
+		success,
+		failed,
+		outcomes: outComes
+	};
 }
