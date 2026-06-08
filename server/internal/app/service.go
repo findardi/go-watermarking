@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"go-watermarking/internal/codec"
 	"go-watermarking/internal/watermark"
@@ -26,40 +27,54 @@ type Request struct {
 	Opacity   float64
 }
 
-type Service struct{}
+type Service struct {
+	sem chan struct{}
+}
 
 type Result struct {
 	Data   []byte `json:"data"`
 	Format string `json:"format"`
 }
 
-func (s Service) Watermark(req Request) ([]Result, error) {
+func NewService(maxWorkers int) Service {
+	return Service{sem: make(chan struct{}, maxWorkers)}
+}
+
+func (s Service) Watermark(ctx context.Context, req Request) ([]Result, []error) {
 	mark, err := buildMark(req)
 	if err != nil {
-		return nil, err
+		return nil, []error{err}
 	}
 
 	placement, err := buildPlacement(req)
 	if err != nil {
-		return nil, err
+		return nil, []error{err}
 	}
 
 	result := make([]Result, len(req.Image))
 	errs := make([]error, len(req.Image))
 
-	const maxWorkers = 8
-	buff := make(chan struct{}, maxWorkers)
 	var wg sync.WaitGroup
 
 	for i, img := range req.Image {
+		select {
+		case <-ctx.Done():
+			errs[i] = ctx.Err()
+			continue
+		case s.sem <- struct{}{}:
+		}
+
 		wg.Add(1)
 
-		buff <- struct{}{}
-
-		go func() {
+		go func(i int, img []byte) {
 			defer wg.Done()
 			defer func() {
-				<-buff
+				<-s.sem
+			}()
+			defer func() {
+				if r := recover(); r != nil {
+					errs[i] = fmt.Errorf("panic on image %d: %v", i, r)
+				}
 			}()
 
 			data, f, err := s.processOne(img, mark, placement, req.Opacity)
@@ -68,18 +83,11 @@ func (s Service) Watermark(req Request) ([]Result, error) {
 				return
 			}
 			result[i] = Result{Data: data, Format: f}
-		}()
+		}(i, img)
 	}
 
 	wg.Wait()
-
-	for i, err := range errs {
-		if err != nil {
-			return nil, fmt.Errorf("failed process image %d: %w", i, err)
-		}
-	}
-
-	return result, nil
+	return result, errs
 }
 
 func (s Service) processOne(image []byte, mark watermark.Mark, placement watermark.Placement, opacity float64) ([]byte, string, error) {

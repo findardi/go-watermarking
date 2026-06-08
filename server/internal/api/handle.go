@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"go-watermarking/internal/app"
 	"io"
 	"mime/multipart"
@@ -11,10 +13,12 @@ import (
 
 const (
 	maxRequestSize = 200 << 20 // 200mb
+	maxImageSize   = 20 << 20  // 20mb
+	maxFormMemory  = 32 << 20
 )
 
 type Watermarker interface {
-	Watermark(app.Request) ([]app.Result, error)
+	Watermark(context.Context, app.Request) ([]app.Result, []error)
 }
 
 type Handler struct {
@@ -54,6 +58,22 @@ type errorBody struct {
 	} `json:"error"`
 }
 
+type imageResult struct {
+	Index    int    `json:"index"`
+	Filename string `json:"filename,omitempty"`
+	Status   string `json:"status"`
+	Format   string `json:"format,omitempty"`
+	Data     []byte `json:"data,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+type response struct {
+	Total   int           `json:"total"`
+	Success int           `json:"success"`
+	Failed  int           `json:"failed"`
+	Results []imageResult `json:"results"`
+}
+
 func (h *Handler) Watermark(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, h.maxBytes)
 
@@ -69,6 +89,12 @@ func (h *Handler) Watermark(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid multipart form")
 		return
 	}
+	defer func() {
+		if err := r.MultipartForm.RemoveAll(); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}()
 
 	var cfg Config
 	if err := json.Unmarshal([]byte(r.FormValue("config")), &cfg); err != nil {
@@ -76,7 +102,7 @@ func (h *Handler) Watermark(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	img, err := readFilesPart(r, "image")
+	img, names, err := readFilesPart(r, "image")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "missing image")
 		return
@@ -103,33 +129,75 @@ func (h *Handler) Watermark(w http.ResponseWriter, r *http.Request) {
 		Opacity:   cfg.Opacity,
 	}
 
-	result, err := h.svc.Watermark(req)
-	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+	result, errs := h.svc.Watermark(r.Context(), req)
+	if result == nil {
+		msg := "could not process request"
+		if len(errs) > 0 && errs[0] != nil {
+			msg = errs[0].Error()
+		}
+		writeError(w, http.StatusUnprocessableEntity, msg)
 		return
 	}
 
+	resp := response{
+		Total:   len(result),
+		Results: make([]imageResult, len(result)),
+	}
+
+	for i := range result {
+		if i < len(errs) && errs[i] != nil {
+			resp.Failed++
+			resp.Results[i] = imageResult{
+				Index:    i,
+				Filename: names[i],
+				Status:   "error",
+				Error:    errs[i].Error(),
+			}
+
+			// todo create log
+			continue
+		}
+
+		resp.Success++
+		resp.Results[i] = imageResult{
+			Index:    i,
+			Filename: names[i],
+			Status:   "ok",
+			Format:   result[i].Format,
+			Data:     result[i].Data,
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(result)
+	if resp.Failed > 0 && resp.Success > 0 {
+		w.WriteHeader(http.StatusMultiStatus)
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
-func readFilesPart(r *http.Request, name string) ([][]byte, error) {
+func readFilesPart(r *http.Request, name string) ([][]byte, []string, error) {
 	headers := r.MultipartForm.File[name]
 
 	if len(headers) == 0 {
-		return nil, errors.New("missing content-length")
+		return nil, nil, errors.New("missing content-length")
 	}
 	files := make([][]byte, 0, len(headers))
+	names := make([]string, 0, len(headers))
 	for _, fh := range headers {
+		if fh.Size > maxImageSize {
+			return nil, nil, fmt.Errorf("image %q exceeds 20MB", fh.Filename)
+		}
 		data, err := readFile(fh)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		files = append(files, data)
+		names = append(names, fh.Filename)
 	}
 
-	return files, nil
+	return files, names, nil
 }
 
 func readFilePart(r *http.Request, name string) ([]byte, error) {
