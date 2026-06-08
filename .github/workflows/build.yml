@@ -1,0 +1,54 @@
+  name: Build binary
+  
+  on:
+    push:
+      branches: [main]
+    workflow_dispatch:
+    
+  permissions:
+    contents: read
+    
+  jobs:
+    build:
+      name: build-embed-binary
+      runs-on: ubuntu-latest
+      steps:
+        - name: Checkout
+          uses: actions/checkout@v4
+          
+        - name: Set up Bun
+          uses: oven-sh/setup-bun@v2
+          with: 
+            bun-version: 1.3.14
+            
+        - name: Set up Go
+          uses: actions/setup-go@v5
+          with: 
+            go-version-file: server/go.mod
+            
+        - name: Install web deps
+          working-directory: web
+          run: bun install --frozen-lockfile
+          
+        - name: Sync SvelteKit
+          working-directory: web
+          run: bun run prepare
+          
+        - name: Lint web (gate)
+          working-directory: web
+          run: bun run lint
+          
+        - name: Build web
+          working-directory: web
+          run: bun run build 
+          
+        - name: Build binary
+          working-directory: server
+          run: go build -o bin/watermarking ./cmd/server
+          
+        - name: Upload binary
+          uses: actions/upload-artifact@v4
+          with: 
+            name: watermarking
+            path: server/bin/watermarking
+            if-no-files-found: error
