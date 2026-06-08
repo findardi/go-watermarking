@@ -1,10 +1,12 @@
 <script lang="ts">
 	import {
-		requestWatermark,
+		processInBatches,
+		batchOptions,
 		WatermarkError,
 		zipResults,
 		type Angle,
-		type WatermarkConfig
+		type WatermarkConfig,
+		type BatchProgress
 	} from '$lib/api';
 
 	let imageFiles = $state<File[]>([]);
@@ -22,7 +24,11 @@
 	let loading = $state(false);
 	let zipping = $state(false);
 	let errMsg = $state<string | null>(null);
-	let results = $state<{ url: string; blob: Blob; format: string }[]>([]);
+
+	let progress = $state<BatchProgress | null>(null);
+	let summary = $state<{ total: number; success: number; failed: number } | null>(null);
+	let results = $state<{ url: string; blob: Blob; format: string; filename?: string }[]>([]);
+	let failures = $state<{ filename?: string; error?: string }[]>([]);
 	let selectedIndex = $state(0);
 
 	let canSubmit = $derived(
@@ -53,19 +59,34 @@
 
 		loading = true;
 		errMsg = null;
+		progress = null;
+		summary = null;
+		failures = [];
 		revokeResults();
 
 		try {
-			const out = await requestWatermark(buildConfig(), {
-				image: imageFiles,
-				watermark: watermarkFile ?? undefined
+			const config = buildConfig();
+			const files = { image: imageFiles, watermark: watermarkFile ?? undefined };
+
+			const run = await processInBatches(config, files, batchOptions(config, files), (p) => {
+				progress = p; // update reaktif tiap batch kelar -> "10/100"
 			});
 
-			results = out.map((r) => ({
-				url: URL.createObjectURL(r.blob),
-				blob: r.blob,
-				format: r.format
-			}));
+			// preview baru disusun SETELAH semua batch selesai
+			results = run.outcomes
+				.filter((o) => o.status === 'ok' && o.blob)
+				.map((o) => ({
+					url: URL.createObjectURL(o.blob!),
+					blob: o.blob!,
+					format: o.format ?? 'png',
+					filename: o.filename
+				}));
+
+			failures = run.outcomes
+				.filter((o) => o.status === 'error')
+				.map((o) => ({ filename: o.filename, error: o.error }));
+
+			summary = { total: run.total, success: run.success, failed: run.failed };
 			selectedIndex = 0;
 		} catch (error) {
 			errMsg = error instanceof WatermarkError ? error.message : 'failed to processing image';
@@ -211,7 +232,11 @@
 
 						<button type="submit" class="btn btn-outline" disabled={!canSubmit || loading}>
 							{#if loading}<span class="loading loading-spinner loading-sm"></span>{/if}
-							{loading ? 'Processing..' : 'Create watermark'}
+							{#if loading && progress}
+								{progress.processed}/{progress.total}
+							{:else}
+								{loading ? 'Processing..' : 'Create watermark'}
+							{/if}
 						</button>
 					</form>
 				</div>
@@ -220,7 +245,21 @@
 			<!-- Preview -->
 			<div class="card bg-base-100 shadow">
 				<div class="card-body">
-					<h2 class="card-title">Preview</h2>
+					<div class="flex items-center justify-between">
+						<h2 class="card-title">Preview</h2>
+						{#if loading && progress}
+							<span class="text-sm text-base-content/60">
+								{progress.processed}/{progress.total} · Batch {progress.batchIndex}/{progress.batchCount}
+							</span>
+						{:else if summary}
+							<span class="text-sm">
+								<span class="text-success">{summary.success} Success</span>
+								{#if summary.failed > 0}
+									· <span class="text-error">{summary.failed} Failed</span>
+								{/if}
+							</span>
+						{/if}
+					</div>
 
 					{#if errMsg}
 						<div role="alert" class="alert alert-error">
@@ -232,43 +271,53 @@
 						<div class="grid h-64 place-items-center">
 							<span class="loading loading-spinner loading-lg"></span>
 						</div>
-					{:else if results.length > 0}
-						<img src={results[selectedIndex].url} alt="Hasil watermark" class="w-full rounded" />
-
-						{#if results.length > 1}
-							<div class="mt-2 flex gap-2 overflow-x-auto pb-2">
-								{#each results as r, i (r.url)}
-									<button
-										type="button"
-										class="shrink-0 overflow-hidden rounded border {i === selectedIndex
-											? 'ring-2 ring-neutral'
-											: 'border-base-300'}"
-										onclick={() => (selectedIndex = i)}
-									>
-										<img src={r.url} alt={`Hasil ${i + 1}`} class="h-16 w-16 object-cover" />
-									</button>
+					{:else if results.length > 0 || summary}
+						{#if failures.length > 0}
+							<ul class="text-xs text-error/80">
+								{#each failures as f, i (i)}
+									<li>{f.filename ?? 'file'} — {f.error}</li>
 								{/each}
-							</div>
+							</ul>
 						{/if}
 
-						<div class="mt-2 flex gap-2">
-							<button
-								class="btn btn-outline"
-								onclick={() => {
-									downloadOne(selectedIndex);
-								}}
-							>
-								Download
-							</button>
-							<button
-								type="button"
-								class="btn btn-neutral"
-								onclick={downloadZip}
-								disabled={zipping}
-							>
-								{zipping ? 'Zipping..' : 'Download All (ZIP)'}
-							</button>
-						</div>
+						{#if results.length > 0}
+							<img src={results[selectedIndex].url} alt="Hasil watermark" class="w-full rounded" />
+
+							{#if results.length > 1}
+								<div class="mt-2 flex gap-2 overflow-x-auto pb-2">
+									{#each results as r, i (r.url)}
+										<button
+											type="button"
+											class="shrink-0 overflow-hidden rounded border {i === selectedIndex
+												? 'ring-2 ring-neutral'
+												: 'border-base-300'}"
+											onclick={() => (selectedIndex = i)}
+										>
+											<img src={r.url} alt={`Hasil ${i + 1}`} class="h-16 w-16 object-cover" />
+										</button>
+									{/each}
+								</div>
+							{/if}
+
+							<div class="mt-2 flex gap-2">
+								<button
+									class="btn btn-outline"
+									onclick={() => {
+										downloadOne(selectedIndex);
+									}}
+								>
+									Download
+								</button>
+								<button
+									type="button"
+									class="btn btn-neutral"
+									onclick={downloadZip}
+									disabled={zipping}
+								>
+									{zipping ? 'Zipping..' : 'Download All (ZIP)'}
+								</button>
+							</div>
+						{/if}
 					{:else}
 						<div
 							class="grid h-64 place-items-center rounded border-2 border-dashed border-base-300 text-base-content/50"
